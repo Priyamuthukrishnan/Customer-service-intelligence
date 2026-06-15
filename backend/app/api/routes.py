@@ -1,1 +1,70 @@
-# TODO
+import uuid
+from typing import List
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from app.db.database import get_db
+from app import schemas, services
+
+router = APIRouter()
+
+@router.get("/tickets", response_model=List[schemas.TicketRead])
+def read_tickets(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    try:
+        return services.get_tickets(db, skip=skip, limit=limit)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+@router.get("/tickets/{ticket_id}", response_model=schemas.TicketDetailRead)
+def read_ticket(ticket_id: uuid.UUID, db: Session = Depends(get_db)):
+    try:
+        ticket = services.get_ticket_by_id(db, ticket_id=ticket_id)
+        if not ticket:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        return ticket
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+@router.get("/tickets/{ticket_id}/analysis", response_model=schemas.AIAnalysisRead)
+def read_ticket_analysis(ticket_id: uuid.UUID, db: Session = Depends(get_db)):
+    try:
+        ticket = services.get_ticket_by_id(db, ticket_id=ticket_id)
+        if not ticket:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        
+        analysis = services.get_ticket_analysis(db, ticket_id=ticket_id)
+        if not analysis:
+            raise HTTPException(status_code=404, detail="AI Analysis not found for this ticket")
+        return analysis
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+@router.get("/tickets/{ticket_id}/comments", response_model=List[schemas.CommentRead])
+def read_ticket_comments(ticket_id: uuid.UUID, db: Session = Depends(get_db)):
+    try:
+        ticket = services.get_ticket_by_id(db, ticket_id=ticket_id)
+        if not ticket:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        
+        return services.get_ticket_comments(db, ticket_id=ticket_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+@router.get("/knowledge/historical-tickets", response_model=List[schemas.HistoricalTicketRead])
+async def read_historical_tickets():
+    try:
+        return await services.get_historical_tickets()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Qdrant query error: {str(e)}")
+
+@router.get("/knowledge/runbooks", response_model=List[schemas.RunbookRead])
+async def read_runbooks():
+    try:
+        return await services.get_runbooks()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Qdrant query error: {str(e)}")
