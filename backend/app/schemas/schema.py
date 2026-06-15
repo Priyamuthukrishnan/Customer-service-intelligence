@@ -80,3 +80,20 @@ class RunbookRead(BaseModel):
     root_cause: Optional[str] = None
     steps: List[str] = []
     owner: Optional[str] = None
+
+
+class TicketUnderstandingResponse(BaseModel):
+    ticket_id: str
+    issue_category: str
+    issue_subcategory: str
+    sentiment: str
+    sentiment_score: float          # 0–100; 0 = most negative, 100 = most positive
+    impact_level: str
+    impact_reason: str
+    severity_score: float           # 0–100
+    keywords: List[str]
+    short_summary: str
+    tags: List[str]
+    related_ticket_ids: List[str]
+    similar_issue_count: int
+    recommended_runbooks: List[str]  # runbook IDs/names only

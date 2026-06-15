@@ -1,1 +1,8 @@
-# TODO
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg2-binary
+python-dotenv
+httpx
+pydantic
+google-genai

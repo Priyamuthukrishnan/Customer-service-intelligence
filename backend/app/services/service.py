@@ -169,3 +169,161 @@ async def get_runbooks() -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error fetching runbooks from Qdrant: {e}", exc_info=True)
         return []
+
+
+# ---------------------------------------------------------------------------
+# Ticket Understanding Service
+# ---------------------------------------------------------------------------
+
+def _tokenize(text: str) -> set:
+    """
+    Produce a set of lowercase tokens (length >= 3) from free text.
+    Used ONLY to score relevance of Qdrant documents for context selection.
+    The resulting scores are never returned in the API response.
+    """
+    return {word for word in text.lower().split() if len(word) >= 3}
+
+
+def _score_historical_ticket(ticket_tokens: set, item: dict) -> int:
+    """Count token overlaps for a single historical ticket (context selection only)."""
+    candidate_text = " ".join([
+        item.get("complaint") or "",
+        item.get("resolution") or "",
+    ])
+    candidate_tokens = _tokenize(candidate_text)
+    return len(ticket_tokens & candidate_tokens)
+
+
+def _score_runbook(ticket_tokens: set, runbook: dict) -> int:
+    """Count token overlaps for a single runbook (context selection only)."""
+    symptoms = runbook.get("symptoms", [])
+    if isinstance(symptoms, list):
+        symptoms_text = " ".join(str(s) for s in symptoms)
+    else:
+        symptoms_text = str(symptoms)
+
+    candidate_text = " ".join([
+        symptoms_text,
+        runbook.get("domain") or "",
+        runbook.get("root_cause") or "",
+    ])
+    candidate_tokens = _tokenize(candidate_text)
+    return len(ticket_tokens & candidate_tokens)
+
+
+async def get_ticket_understanding(db: Session, ticket_id: uuid.UUID) -> dict:
+    """
+    Orchestrate all four layers of the Ticket Understanding Service.
+
+    Layer 1 – Ticket Data Loader:
+        Fetch ticket and comments from Neon PostgreSQL.
+
+    Layer 2 – Knowledge Context Retriever:
+        Scroll Qdrant collections, score by token overlap (selection only),
+        select top-5 historical tickets and top-3 runbooks.
+
+    Layer 3 – Gemini Understanding Engine:
+        Delegate to ai.ticket_understanding.run_gemini_understanding().
+        Gemini generates all output fields dynamically.
+
+    Layer 4 – Response Builder:
+        Construct TicketUnderstandingResponse from Gemini output.
+    """
+    from app.ai.ticket_understanding import run_gemini_understanding
+    from app.schemas.schema import TicketUnderstandingResponse
+
+    # ------------------------------------------------------------------
+    # Layer 1: Ticket Data Loader
+    # ------------------------------------------------------------------
+    ticket = get_ticket_by_id(db, ticket_id=ticket_id)
+    if not ticket:
+        return None
+
+    comments = get_ticket_comments(db, ticket_id=ticket_id)
+
+    # Serialise ORM objects into plain dicts for downstream layers
+    ticket_dict = {
+        "id": str(ticket.id),
+        "title": ticket.title,
+        "description": ticket.description,
+        "priority": ticket.priority,
+        "status": ticket.status,
+        "customer_name": ticket.customer_name,
+        "application_name": ticket.application_name,
+        "created_at": str(ticket.created_at) if ticket.created_at else None,
+    }
+
+    comment_dicts = [
+        {
+            "comment_text": c.comment_text,
+            "commented_by": c.commented_by,
+        }
+        for c in comments
+    ]
+
+    # ------------------------------------------------------------------
+    # Layer 2: Knowledge Context Retriever
+    # ------------------------------------------------------------------
+
+    # Build search text from ticket + comments — used for token scoring only
+    comment_texts = " ".join(c.comment_text for c in comments if c.comment_text)
+    search_text = f"{ticket.title} {ticket.description} {comment_texts}"
+    ticket_tokens = _tokenize(search_text)
+
+    # Fetch all points from both Qdrant collections (reuse existing pattern)
+    all_historical = await get_historical_tickets()
+    all_runbooks = await get_runbooks()
+
+    # Score and select top-5 historical tickets (score used for selection only)
+    scored_historical = sorted(
+        all_historical,
+        key=lambda item: _score_historical_ticket(ticket_tokens, item),
+        reverse=True,
+    )
+    selected_historical = scored_historical[:5]
+
+    # Score and select top-3 runbooks (score used for selection only)
+    scored_runbooks = sorted(
+        all_runbooks,
+        key=lambda rb: _score_runbook(ticket_tokens, rb),
+        reverse=True,
+    )
+    selected_runbooks = scored_runbooks[:3]
+
+    logger.info(
+        "Context selected for ticket '%s': %d historical tickets, %d runbooks",
+        ticket_id,
+        len(selected_historical),
+        len(selected_runbooks),
+    )
+
+    # ------------------------------------------------------------------
+    # Layer 3: Gemini Understanding Engine
+    # ------------------------------------------------------------------
+    gemini_output = await run_gemini_understanding(
+        ticket=ticket_dict,
+        comments=comment_dicts,
+        historical_tickets=selected_historical,
+        runbooks=selected_runbooks,
+    )
+
+    # ------------------------------------------------------------------
+    # Layer 4: Response Builder
+    # ------------------------------------------------------------------
+    response = TicketUnderstandingResponse(
+        ticket_id=str(ticket_id),
+        issue_category=gemini_output.get("issue_category", ""),
+        issue_subcategory=gemini_output.get("issue_subcategory", ""),
+        sentiment=gemini_output.get("sentiment", ""),
+        sentiment_score=float(gemini_output.get("sentiment_score", 0)),
+        impact_level=gemini_output.get("impact_level", ""),
+        impact_reason=gemini_output.get("impact_reason", ""),
+        severity_score=float(gemini_output.get("severity_score", 0)),
+        keywords=gemini_output.get("keywords") or [],
+        short_summary=gemini_output.get("short_summary", ""),
+        tags=gemini_output.get("tags") or [],
+        related_ticket_ids=gemini_output.get("related_ticket_ids") or [],
+        similar_issue_count=int(gemini_output.get("similar_issue_count", 0)),
+        recommended_runbooks=gemini_output.get("recommended_runbooks") or [],
+    )
+    return response

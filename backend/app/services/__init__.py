@@ -5,4 +5,5 @@ from app.services.service import (
     get_ticket_analysis,
     get_historical_tickets,
     get_runbooks,
+    get_ticket_understanding,
 )
