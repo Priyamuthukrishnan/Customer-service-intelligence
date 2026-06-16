@@ -6,4 +6,6 @@ from app.services.service import (
     get_historical_tickets,
     get_runbooks,
     get_ticket_understanding,
+    get_ticket_summary,
 )
+
