@@ -97,3 +97,20 @@ class TicketUnderstandingResponse(BaseModel):
     related_ticket_ids: List[str]
     similar_issue_count: int
     recommended_runbooks: List[str]  # runbook IDs/names only
+
+
+class TicketSummaryResponse(BaseModel):
+    ticket_id: str
+    ticket_title: str               # sourced from Neon, not Gemini (prevents hallucination)
+    summary: str
+    customer_problem: str
+    current_status: str
+    business_impact: str
+    sentiment_summary: str
+    key_events: List[str]
+    actions_taken: List[str]
+    pending_actions: List[str]
+    risk_level: str
+    recommended_next_action: str
+    related_ticket_ids: List[str]
+    recommended_runbooks: List[str]
