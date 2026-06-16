@@ -5,4 +5,5 @@ from app.schemas.schema import (
     TicketDetailRead,
     HistoricalTicketRead,
     RunbookRead,
+    TicketUnderstandingResponse,
 )
